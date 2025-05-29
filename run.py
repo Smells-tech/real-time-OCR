@@ -33,40 +33,31 @@ def sequential(args):
         image = screengrab(args.screen_rect)
 
         # Extract text
-        text = pytesseract.image_to_string(image)
+        ocr = pytesseract.image_to_string(image)
 
         # Split into words
         # text = split_keep_newlines(text)
-        text = text.strip()
+        ocr = ocr.strip()
+
+        # Store window to use as input to the alignment process
+        window = int(len(ocr) * args.window)
 
         # Match and align to store
         if len(store)>0:
-            overlap, dist = align_sequences(store, text)
+            # TODO: Don't push the entire store, just the last N words
+            amalgamation = align_sequences(store[-window:], ocr)
+            print("Archived", "\n", store[:-window])
+            print("Active store", "\n", store[-window:])
+            print("OCR", "\n", ocr)
+            print("amalgamation", "\n", amalgamation)
+            print(f"store length: \t {len(store)}")
+            print(f"ocr length: \t {len(ocr)}")
+            print(f"window: \t {args.window}, {window}")
+            print()
+            input("enter")
+            store = store[:-window] + amalgamation
         else:
-            overlap = 0
-            dist = None
-
-        # Merge overlapping part
-        if overlap>0:
-            storeblock = store[-overlap:]
-            textblock = text[:overlap]
-
-            amalgamation = Merger.merge_aligned_words(storeblock, textblock)
-
-            store = store[:-overlap] + amalgamation
-
-            # Print stuff to console
-            if args.verbose:
-                image.show()
-                print(f"Tesseract:\n\n{text}", end="\n\n")
-                print(f"Overlap:\t{str(overlap)}")
-                print(f"Storeblock:\n\n{storeblock}", end="\n\n")
-                print(f"Textblock:\n\n{textblock}", end="\n\n")
-                print(f"Amalgamation:\n\n{amalgamation}", end="\n\n")
-                print(f"Residue:\n\n{text[overlap:]}", end="\n\n")
-                input(f"Press enter to continue")
-
-        store = store + text[overlap:]
+            store = ocr
 
         # Save to .txt file
         save_txt(' '.join(store), args.title)
@@ -77,7 +68,7 @@ def sequential(args):
         # Assert condition
         if args.final_text:
             finished = fuzzy_contains(
-                ' '.join(text),
+                ' '.join(ocr),
                 args.final_text,
                 max_error=int(args.max_error*len(args.final_text))
                 )
@@ -187,6 +178,15 @@ def main():
         "--max_error",
         help=f"Errors allowed for matching text as a fraction of smallest text length, default is {max_error}",
         default=max_error,
+        type=float
+        )
+
+    # Alignment window
+    window = 1.05
+    parser.add_argument(
+        "--window",
+        help=f"The 'window' for aligning new sequences to the currect store, as a fraction of the new sequence length, default is {window}",
+        default=window,
         type=float
         )
 

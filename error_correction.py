@@ -20,9 +20,9 @@ DEFAULT_CORRECTIONS = {
 }
 
 class OCRMerger:
-    def __init__(self, custom_vocab=None, ocr_corrections=DEFAULT_CORRECTIONS):
+    def __init__(self, custom_vocab=None, ocr_corrections=DEFAULT_CORRECTIONS, language='nl'):
         # Initialize spell checker with optional custom vocabulary
-        self.spell = SpellChecker()
+        self.spell = SpellChecker(language=language)
         if custom_vocab:
             self.spell.word_frequency.load_words(custom_vocab)
 
@@ -77,10 +77,6 @@ class OCRMerger:
         w1_correct = self.is_word_correct(w1)
         w2_correct = self.is_word_correct(w2)
 
-        # Priority: both correct → choose shorter edit distance to original
-        # one correct → choose correct
-        # none correct → choose word with smaller edit distance to dictionary suggestion
-
         if w1_correct and not w2_correct:
             return w1
         elif w2_correct and not w1_correct:
@@ -93,7 +89,6 @@ class OCRMerger:
             w1_suggestion = self.spell.correction(w1)
             w2_suggestion = self.spell.correction(w2)
 
-            # Compute edit distances
             dist_w1 = Levenshtein.distance(w1, w1_suggestion) if w1_suggestion else float('inf')
             dist_w2 = Levenshtein.distance(w2, w2_suggestion) if w2_suggestion else float('inf')
 
@@ -102,18 +97,42 @@ class OCRMerger:
             else:
                 return w2_suggestion or w2
 
-    def merge_aligned_words(self, words1, words2):
+    def choose_best_word_among(self, *words):
+        """
+        Given a list of words (strings), pick the best one using pairwise comparisons.
+        """
+        # If all words are identical, just return one
+        if len(set(words)) == 1:
+            return words[0]
 
-        if len(words1) != len(words2):
-            raise ValueError("Aligned strings must have the same number of words")
+        # Iteratively pick best word by pairwise comparison
+        best_word = words[0]
+        for w in words[1:]:
+            best_word = self.choose_better_word(best_word, w)
+        return best_word
+
+    def merge_aligned_words(self, *word_lists):
+        """
+        Merge any number of aligned word sequences.
+        All sequences must have the same length.
+        """
+        if not word_lists:
+            return []
+
+        length = len(word_lists[0])
+        for wl in word_lists:
+            if len(wl) != length:
+                raise ValueError("All aligned sequences must have the same length")
 
         merged_words = []
-        for w1, w2 in zip(words1, words2):
-            if w1 == w2:
-                merged_words.append(w1)
+        for i in range(length):
+            candidates = [wl[i] for wl in word_lists]
+            # If all candidates are identical, no need to choose
+            if len(set(candidates)) == 1:
+                merged_words.append(candidates[0])
             else:
-                better_word = self.choose_better_word(w1, w2)
-                merged_words.append(better_word)
+                best_word = self.choose_best_word_among(*candidates)
+                merged_words.append(best_word)
 
         return merged_words
 
@@ -189,43 +208,32 @@ def align_sequences_nw(words1, words2, gap_penalty=1, max_error=0.1):
     return best_overlap, best_score
 
 def align_sequences(str1, str2, mode='global', match_score=2, mismatch_score=-1, open_gap_score=-.5, extend_gap_score=-.1):
-    m, n = len(str1), len(str2)
 
-    best_score = 0
-    best_overlap = 0
+    Merger = OCRMerger()
 
-    aligner = Align.PairwiseAligner(mode=mode, match_score=match_score, mismatch_score=mismatch_score)
-    aligner.open_gap_score = open_gap_score
-    aligner.extend_gap_score = extend_gap_score
-    aligner.target_end_gap_score = 0.0
-    aligner.query_end_gap_score = 0.0
-    norm = max(m, n) * aligner.match_score
+    Aligner = Align.PairwiseAligner(mode=mode, match_score=match_score, mismatch_score=mismatch_score)
+    Aligner.open_gap_score = open_gap_score
+    Aligner.extend_gap_score = extend_gap_score
+    Aligner.target_end_gap_score = 0.0
+    Aligner.query_end_gap_score = 0.0
 
-    alignments = aligner.align(str1, str2)
+    alignments = Aligner.align(str1, str2)
 
-    print(f"Alignments:\t{len(alignments):>15}")
-    stores = []
-    amalgamations = []
-    residues = []
+    variants = []
     for alignment in alignments:
-        print(f"Score: \t{alignment.score/norm:>15}")
         indices1, indices2 = alignment.indices
         blocks1, blocks2 = alignment.aligned
 
         # Non-overlapping prefix
         start1 = blocks1[0, 0]
-        store = str1[:start1]
-        stores.append(store)
+        words = split_keep_newlines(str1[:start1])
 
         # Non-overlapping suffix
         fin2 = blocks2[-1, -1]
-        residue = str2[fin2:]
-        residues.append(residue)
-
-        # Array of possible amalgamations
-        amalgamations = [""]
+        residue = split_keep_newlines(str2[fin2:])
 
         # Build set of possible amalgamations
+        amalgamations = [""] # Start with a single branch
         for i1, i2 in zip(indices1, indices2):
             if i1<start1 or i2>fin2:
                 continue # Only take aligned regions
@@ -233,60 +241,21 @@ def align_sequences(str1, str2, mode='global', match_score=2, mismatch_score=-1,
                 if i1>=0:
                     if i2>=0:
                         if str1[i1] != str2[i2]:
-                            amalgamations.append(amalg + str2[i2])
+                            amalgamations.append(amalg + str2[i2]) # 2 options, add branch
                     amalgamations[a] = amalg + str1[i1]
                 elif i2>=0:
                     amalgamations[a] = amalg + str2[i2]
 
-            # for i, j in zip(*alignment.aligned):
-                # amalg1 = amalg1 + str1[slice(*i)]
-                # amalg2 = amalg2 + str2[slice(*j)]
+        # Choose best set of words
+        amalgamations = [split_keep_newlines(a) for a in amalgamations]
+        prime_amalgamation = [Merger.choose_best_word_among(*set(w)) for w in zip(*amalgamations)]
 
-        print("Store", "\n", store, end='\n')
-        pass
-        for i, amalg in enumerate(amalgamations):
-            print(f"Amalgamation {i+1}/{len(amalgamations)}", "\n", amalg, end='\n')
-            pass
-        print("Residue", "\n", residue, end='\n')
-        pass
+        words.extend(prime_amalgamation)
+        words.extend(residue)
+        variants.append(words)
 
-    return best_overlap, best_score
+    assert all(len(v) == len(variants[0]) for v in variants), "Variants must all be same length"
 
-# def align_sorta_overlapping_words(words1, words2, max_error=.05):
+    prime_amalgamation = join_with_newlines([Merger.choose_best_word_among(*set(w)) for w in zip(*variants)])
 
-#     max_overlap = min(len(words1), len(words2))
-#     if max_overlap == 0:
-#         return 0, None
-
-#     rng = range(max_overlap, 0, -1)
-#     distances = []
-#     for overlap_len in rng:
-#         block1 = words1[-overlap_len:]
-#         block2 = words2[:overlap_len]
-#         dist = sum(word_distance(w1, w2) for w1, w2 in zip(block1, block2))
-#         if dist == 0:
-#             # Exact match, early return
-#             return overlap_len, None
-#         distances.append(dist)
-
-#     # Find best match
-#     i = distances.index(min(distances))
-    # overlap_len = rng[i]
-
-#     # TODO: Write an error check function that uses words instead of strings
-#     str1 = ' '.join(words1[-overlap_len:])
-#     dist = distances[i]
-#     if dist>max_error:
-#         print('\n'*100)
-#         print(f"Store:\n\n{words1[:-overlap_len]}", end="\n\n")
-#         print(f"Storeblock:\n\n{words1[-overlap_len:]}", end="\n\n")
-#         print(f"Textblock:\n\n{words2[:overlap_len]}", end="\n\n")
-#         print(f"Residual:\n\n{words2[overlap_len:]}", end="\n\n")
-#         print(f"Abort merger, maximum error of {max_error*100}% exceeded")
-#         print(f"Overlap is             \t{str(overlap_len)}")
-#         print(f"Amalgamation length is \t{len(str1)}")
-#         print(f"distance is            \t{dist}")
-#         input(f"Press enter to continue")
-#         return 0, None
-
-#     return overlap_len, dist
+    return prime_amalgamation

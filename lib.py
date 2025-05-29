@@ -67,6 +67,20 @@ def split_keep_newlines(text: str) -> list[str]:
     pattern = r'[^\s\n]+|\n'
     return re.findall(pattern, text)
 
+def join_with_newlines(words: list[str]) -> str:
+    if not words:
+        return ''
+    
+    result = [words[0]]
+    for prev, curr in zip(words, words[1:]):
+        if prev == '\n' or curr == '\n':
+            # No space around newlines
+            result.append(curr)
+        else:
+            # Add space between words
+            result.append(' ' + curr)
+    return ''.join(result)
+
 def screengrab( rect ):
     """ Given a rectangle, return a PIL Image of that part of the screen.
     Handles a Linux installation with and older Pillow by falling-back
