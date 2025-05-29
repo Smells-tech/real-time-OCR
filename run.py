@@ -10,90 +10,19 @@ import random
 # env
 import pytesseract
 # local
-from error_correction import OCRMerger
+from error_correction import *
 from lib import *
-
-def multithread(args):
-    """Multithread"""
-    # Create a queue to store screen captures
-    screen_capture_queue = Queue()
-
-    # Define the screen capture thread
-    def screen_capture_thread(screen_rect, fps) -> None:
-        """Continuous screen capture thread"""
-
-        # Forever loop
-        while True:
-            image = screengrab(screen_rect)
-            screen_capture_queue.put(image)
-            time.sleep(1 / fps)  # adjust the FPS here
-
-    # Define the OCR processing thread
-    def ocr_processing_thread(max_errors, verbose=False, final_text=False, title='output') -> None:
-        """OCR processing thread"""
-        store = ""
-        while True:
-            image = screen_capture_queue.get()
-            text = pytesseract.image_to_string(image)
-            # process the text here
-            screen_capture_queue.task_done()
-            # Create and start the threads
-
-            # Strip
-            text = text.strip()
-
-            # Match and align to store
-            if max_errors>0:
-                errors = int(max_errors*len(text))
-                reduced = fuzzymerge_overlapping_strings(store, text, max_errors=errors)
-            else:
-                reduced = merge_overlapping_strings(store, text)
-            
-            # Merge with store
-            store+=reduced
-
-            # Save to .txt file
-            save_text(store, f"{title}.txt")
-
-            # Print to console
-            if verbose:
-                split = text.split()
-                print(" ".join(split[:10]))
-                print(" ".join(split[-10:]))
-
-            if final_text:
-                if fuzzy_contains(text, final_text, max_errors=max_errors):
-                    close()
-
-    ### Loop forever, monitoring the user-specified rectangle of the screen
-    screen_capture_thread = threading.Thread(
-        target=screen_capture_thread,
-        args=(
-            args.screen_rect,
-            args.fps,
-            )
-        )
-    ocr_processing_thread = threading.Thread(
-        target=ocr_processing_thread,
-        kwargs={
-            'verbose': args.verbose,
-            'max_errors': args.max_errors,
-            'final_text': args.final_text,
-            'title':args.title
-            }
-        )
-
-    # Start the threads
-    try:
-        screen_capture_thread.start()
-        ocr_processing_thread.start()
-    except Exception as e:
-        print(e)
-        sys.exit(1)
-
 
 def sequential(args):
     """Sequential bookreader"""
+
+    Merger = OCRMerger()
+
+    # Position
+    x, y, width, height = args.screen_rect
+    # Mouse wheel 'notches' till full screen
+    rad = height-y
+    notches = math.floor(rad/args.notchpixels)
 
     # Conditional loop
     store = ""
@@ -101,41 +30,56 @@ def sequential(args):
     while finished is False:
 
         # Grab screen
-        image = screengrab(args.screen_rect, notchpixels=args.notchpixels)
+        image = screengrab(args.screen_rect)
 
         # Extract text
         text = pytesseract.image_to_string(image)
 
-        # Strip
+        # Split into words
+        # text = split_keep_newlines(text)
         text = text.strip()
 
         # Match and align to store
-        if args.max_errors>0:
-            reduced = fuzzymerge_overlapping_strings(
-                store,
-                text,
-                max_errors=int(args.max_errors*len(text))
-                )
+        if len(store)>0:
+            overlap, dist = align_sequences(store, text)
         else:
-            reduced = merge_overlapping_strings(
-                store,
-                text
-                )
-        store+=reduced
+            overlap = 0
+            dist = None
+
+        # Merge overlapping part
+        if overlap>0:
+            storeblock = store[-overlap:]
+            textblock = text[:overlap]
+
+            amalgamation = Merger.merge_aligned_words(storeblock, textblock)
+
+            store = store[:-overlap] + amalgamation
+
+            # Print stuff to console
+            if args.verbose:
+                image.show()
+                print(f"Tesseract:\n\n{text}", end="\n\n")
+                print(f"Overlap:\t{str(overlap)}")
+                print(f"Storeblock:\n\n{storeblock}", end="\n\n")
+                print(f"Textblock:\n\n{textblock}", end="\n\n")
+                print(f"Amalgamation:\n\n{amalgamation}", end="\n\n")
+                print(f"Residue:\n\n{text[overlap:]}", end="\n\n")
+                input(f"Press enter to continue")
+
+        store = store + text[overlap:]
 
         # Save to .txt file
-        save_text(store, f"{args.title}.txt")
+        save_txt(' '.join(store), args.title)
 
-        # Print to console
-        if args.verbose:
-            print(" ".join(text.split()[-15:]))
+        # Scroll down entire screen
+        screenscroll(args.screen_rect, notches)
 
         # Assert condition
         if args.final_text:
             finished = fuzzy_contains(
-                text,
+                ' '.join(text),
                 args.final_text,
-                max_errors=int(args.max_errors*len(args.final_text))
+                max_error=int(args.max_error*len(args.final_text))
                 )
 
     # Close off
@@ -153,37 +97,41 @@ def grablast(args):
     xs, ys = random.randint(x, width), random.randint(y, height)
 
     # PageDown
-    if args.homekeys:
-        press_end_key()
-    else:
+    if args.nohomekey:
         for _ in range(50):
             scroll(xs, ys, dwData=int(-2**30))
             time.sleep(.05*random.random())
+    else:
+        mouseclick(xs, ys)
+        press_end_key()
 
-    time.sleep(.5+random.random())
+    time.sleep(1+random.random())
 
     # Grab screen
-    image = screengrab(args.screen_rect, dwData=0)
+    image = screengrab(args.screen_rect)
 
     # Extract text
     text = pytesseract.image_to_string(image)
 
-    # Strip
-    text = text.strip()
+    # Split into words
+    text = split_keep_newlines(text)
+
+    # TODO: Correct spelling here?
 
     if args.verbose:
         print(f'Extracted final text:\n{text}\n')
-        print('Scrolling up')
+        print('Scrolling up', end="\n\n")
 
     # PageUp
-    if args.homekeys:
-        press_home_key()
-    else:
+    if args.nohomekey:
         for _ in range(50):
             scroll(xs, ys, dwData=int(2**30))
             time.sleep(.05+random.random())
+    else:
+        mouseclick(xs, ys)
+        press_home_key()
 
-    time.sleep(.5+random.random())
+    time.sleep(1+random.random())
 
     return text
 
@@ -201,51 +149,57 @@ def main():
 
     # Parse CL arguments
     parser=argparse.ArgumentParser()
-    parser.add_argument(
-        "--fps",
-        help="Set FPS value for multithreading, default is False",
-        default=False,
-        type=int
-        )
-    parser.add_argument(
-        "--notchpixels",
-        help="Set scroll negative offset relative to a full screen scroll, default is .1",
-        default=55,
-        type=float
-        )
+
+    # Verbose output
     parser.add_argument(
         "--verbose",
         help="Verbose output",
         action='store_true'
         )
-    parser.add_argument(
-        "--max_errors",
-        help="Errors allowed for matching text as a fraction of smallest text length, default is .1",
-        default=.05,
-        type=float
-        )
-    parser.add_argument(
-        "--final_text",
-        help="The last line you're expecting to read. Script will finish when a match is found. Default is False: script starts by extracting final text",
-        type=str,
-        default=False
-        )
+
+    # Document title
     parser.add_argument(
         "--title",
-        help="Title of the document to read.",
+        help="Title of the .txt output file. Default is 'output'",
+        default="output",
         type=str
         )
+
+    # Use Home & End keys
     parser.add_argument(
-        "--homekeys",
-        help="The home and end keys work; they reach the bodem and top of the document.",
-        action='store_false'
+        "--nohomekey",
+        help="Use this flag if the home and end keys do not work in your document; they are used to reach the bodem and top of the document.",
+        action='store_true'
         )
+
+    # Scroll distance
+    notchpixels=45
     parser.add_argument(
-        "--pages",
-        help="Number of pages to scroll to the bottom, default is 100",
-        type=int,
-        default=10
+        "--notchpixels",
+        help=f"Amount of pixels that correspond to a single 'click' of the scrollwheel. Default = {notchpixels}",
+        default=notchpixels,
+        type=float
         )
+
+    # Error allowance
+    max_error=.1
+    parser.add_argument(
+        "--max_error",
+        help=f"Errors allowed for matching text as a fraction of smallest text length, default is {max_error}",
+        default=max_error,
+        type=float
+        )
+
+    # Final line of text
+    final_text=False
+    parser.add_argument(
+        "--final_text",
+        help=f"The last line you're expecting to read. Script will finish when a match is found. Default is {final_text}: script starts by extracting final text",
+        type=str,
+        default=final_text
+        )
+
+    # Bounding box
     parser.add_argument(
         "screen_rect",
         help="x y w h coördinates of the bounding box to screen grab",
@@ -254,8 +208,6 @@ def main():
         default=[0, 0, screen_width, screen_height]
         )
     args=parser.parse_args()
-
-    print('Homekeys as Parsed: ', args.homekeys)
 
     # Check the arguments
     if len(args.screen_rect) != 4:
@@ -269,26 +221,18 @@ def main():
             )
         sys.exit(1)
 
-    # Area of screen to monitor
-    print( EXE + ": watching " + str( args.screen_rect ) )
-    print( "Verbose: " + str( args.verbose ) )
-    print( "Negative scroll offset relative to a full screen scroll: " + str( args.notchpixels ) )
-    print( "Maximum errors in fuzzy string matching: " + str( args.max_errors ) )
-
     # Countdown
     downfrom = 5
-    for i in range(downfrom, 0, -1):
-        print(f"Starting in {i} seconds...", flush=True, end="\r")
-        time.sleep(1)
+    print(f'Verbose = {args.verbose}')
+    # for i in range(downfrom, 0, -1):
+    #     print(f"Starting in {i} seconds...", flush=True, end="\r")
+    #     time.sleep(1)
     print()
 
     if not args.final_text:
         args.final_text = grablast(args)
 
-    if args.fps is not False:
-        multithread(args)
-    else:
-        sequential(args)
+    sequential(args)
 
 if __name__ == "__main__":
     main()
