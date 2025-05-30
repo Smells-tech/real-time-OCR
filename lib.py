@@ -55,31 +55,13 @@ def press_pageup( sleep=1 ):
 
 def screenscroll( rect, notches, sleep=.05 ):
     x, y, width, height = rect
+    xs, ys = random.randint(x, width), random.randint(y, height)
     # Scroll down
+    mouseclick(xs, ys)  # Focus screen
     for _ in range(notches):
         xs, ys = random.randint(x, width), random.randint(y, height)
-        mouseclick(xs, ys)
         scroll(xs, ys)
         time.sleep(sleep*random.random())
-
-def split_keep_newlines(text: str) -> list[str]:
-    # This regex matches either sequences of non-whitespace except newline OR a newline character
-    pattern = r'[^\s\n]+|\n'
-    return re.findall(pattern, text)
-
-def join_with_newlines(words: list[str]) -> str:
-    if not words:
-        return ''
-    
-    result = [words[0]]
-    for prev, curr in zip(words, words[1:]):
-        if prev == '\n' or curr == '\n':
-            # No space around newlines
-            result.append(curr)
-        else:
-            # Add space between words
-            result.append(' ' + curr)
-    return ''.join(result)
 
 def screengrab( rect ):
     """ Given a rectangle, return a PIL Image of that part of the screen.

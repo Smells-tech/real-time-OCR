@@ -12,11 +12,12 @@ import pytesseract
 # local
 from error_correction import *
 from lib import *
+from timer import tracker
+
+Merger = OCRMerger()
 
 def sequential(args):
     """Sequential bookreader"""
-
-    Merger = OCRMerger()
 
     # Position
     x, y, width, height = args.screen_rect
@@ -27,7 +28,11 @@ def sequential(args):
     # Conditional loop
     store = ""
     finished = False
+    prevtail = ""
     while finished is False:
+
+        tracker.start('Loop')
+        tracker.start('From screengrab to string')
 
         # Grab screen
         image = screengrab(args.screen_rect)
@@ -35,8 +40,9 @@ def sequential(args):
         # Extract text
         ocr = pytesseract.image_to_string(image)
 
+        tracker.stop('From screengrab to string')
+
         # Split into words
-        # text = split_keep_newlines(text)
         ocr = ocr.strip()
 
         # Store window to use as input to the alignment process
@@ -44,34 +50,41 @@ def sequential(args):
 
         # Match and align to store
         if len(store)>0:
-            # TODO: Don't push the entire store, just the last N words
-            amalgamation = align_sequences(store[-window:], ocr)
-            print("Archived", "\n", store[:-window])
-            print("Active store", "\n", store[-window:])
-            print("OCR", "\n", ocr)
-            print("amalgamation", "\n", amalgamation)
-            print(f"store length: \t {len(store)}")
-            print(f"ocr length: \t {len(ocr)}")
-            print(f"window: \t {args.window}, {window}")
-            print()
-            input("enter")
+
+            tracker.start('align_sequences')
+
+            amalgamation = Merger.align_sequences(store[-window:], ocr)
             store = store[:-window] + amalgamation
+
+            tracker.stop('align_sequences')
+
         else:
             store = ocr
 
+        tracker.start('Save up')
+
         # Save to .txt file
-        save_txt(' '.join(store), args.title)
+        save_txt(store, args.title)
 
-        # Scroll down entire screen
+        # Scroll down
         screenscroll(args.screen_rect, notches)
+        
+        # Correct last 10% of OCR text
+        ocrtail = Merger.correction( ocr[int( -.1 * len(ocr) ):] )
 
-        # Assert condition
-        if args.final_text:
-            finished = fuzzy_contains(
-                ' '.join(ocr),
-                args.final_text,
-                max_error=int(args.max_error*len(args.final_text))
-                )
+        # Compare ocr tail to previous tail
+        finished = fuzzy_contains(
+            prevtail,
+            ocrtail,
+            max_error=int(args.max_error*len(args.final_text))
+        )
+
+        prevtail = ocrtail
+
+        tracker.stop('Save up')
+        tracker.stop('Loop')
+
+        tracker.boxplot()
 
     # Close off
     close()
@@ -104,10 +117,11 @@ def grablast(args):
     # Extract text
     text = pytesseract.image_to_string(image)
 
-    # Split into words
-    text = split_keep_newlines(text)
+    # Strip whitespace
+    text = text.strip()
 
-    # TODO: Correct spelling here?
+    # Correct words in text
+    text = Merger.correction(text)
 
     if args.verbose:
         print(f'Extracted final text:\n{text}\n')
@@ -223,10 +237,11 @@ def main():
 
     # Countdown
     downfrom = 5
-    print(f'Verbose = {args.verbose}')
-    # for i in range(downfrom, 0, -1):
-    #     print(f"Starting in {i} seconds...", flush=True, end="\r")
-    #     time.sleep(1)
+    if args.verbose:
+        print(f'Verbose is {args.verbose}')
+    for i in range(downfrom, 0, -1):
+        print(f"Starting in {i} seconds...", flush=True, end="\r")
+        time.sleep(1)
     print()
 
     if not args.final_text:

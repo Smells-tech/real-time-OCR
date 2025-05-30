@@ -5,6 +5,7 @@ import Levenshtein
 from Bio import Align
 
 from lib import *
+from timer import tracker
 
 DEFAULT_CORRECTIONS = {
     '0': 'O',  # zero to capital O
@@ -32,7 +33,7 @@ class OCRMerger:
         # Cache for spell check results
         self._cache = {}
 
-    def correct_ocr_errors(self, word):
+    def correct_ocr_errors(self, word:str):
         # Detect capitalization pattern
         if word.isupper():
             cap_type = 'upper'
@@ -58,7 +59,7 @@ class OCRMerger:
         else:
             return corrected_word
 
-    def is_word_correct(self, word):
+    def is_word_correct(self, word:str):
         # Check cache first
         if word in self._cache:
             return self._cache[word]
@@ -67,7 +68,7 @@ class OCRMerger:
         self._cache[word] = correct
         return correct
 
-    def choose_better_word(self, w1, w2):
+    def choose_better_word(self, w1:str, w2:str):
         # Pre-correct OCR errors
         if self.ocr_corrections is not None:
             w1 = self.correct_ocr_errors(w1)
@@ -97,12 +98,29 @@ class OCRMerger:
             else:
                 return w2_suggestion or w2
 
-    def choose_best_word_among(self, *words):
+    def correction(self, string:str):
+        """Correct words in the given string."""
+        # Split into words, keep newlines
+        words = split_keep_newlines(string)
+
+        # Correct each word
+        for i, w in enumerate(words):
+            corr = self.spell.correction(w)
+            if corr:
+                words[i] = corr
+
+        # Join with newlines
+        return join_with_newlines(words)
+
+    def choose_best_word_among(self, *words:str):
         """
         Given a list of words (strings), pick the best one using pairwise comparisons.
         """
+        # Filter unique entries
+        words = list(set(words))
+
         # If all words are identical, just return one
-        if len(set(words)) == 1:
+        if len(words) == 1:
             return words[0]
 
         # Iteratively pick best word by pairwise comparison
@@ -111,7 +129,7 @@ class OCRMerger:
             best_word = self.choose_better_word(best_word, w)
         return best_word
 
-    def merge_aligned_words(self, *word_lists):
+    def merge_aligned_words(self, *word_lists:list[str]):
         """
         Merge any number of aligned word sequences.
         All sequences must have the same length.
@@ -136,6 +154,100 @@ class OCRMerger:
 
         return merged_words
 
+    def align_sequences(self, str1:str, str2:str, mode='global', match_score=2, mismatch_score=-1, open_gap_score=-.5, extend_gap_score=-.1, max_alignments=1):
+
+        tracker.start('align_sequences: Prep')
+
+        Aligner = Align.PairwiseAligner(mode=mode, match_score=match_score, mismatch_score=mismatch_score)
+        Aligner.open_gap_score = open_gap_score
+        Aligner.extend_gap_score = extend_gap_score
+        Aligner.target_end_gap_score = 0.0
+        Aligner.query_end_gap_score = 0.0
+
+        alignments = Aligner.align(str1, str2)
+
+        variants = []
+
+        tracker.stop('align_sequences: Prep')
+
+        for alignment in alignments:
+
+            tracker.start('align_sequences: Alignment prep')
+
+            indices1, indices2 = alignment.indices
+            blocks1, blocks2 = alignment.aligned
+
+            # Non-overlapping prefix
+            start1 = blocks1[0, 0]
+            words = split_keep_newlines(str1[:start1])
+
+            # Non-overlapping suffix
+            fin2 = blocks2[-1, -1]
+            residue = split_keep_newlines(str2[fin2:])
+
+            # Build set of possible amalgamations
+            amalgamations = [""] # Start with a single branch
+
+            tracker.stop('align_sequences: Alignment prep')
+            tracker.start('align_sequences: Construct amalgamations')
+
+            for i1, i2 in zip(indices1, indices2):
+                if i1<start1 or i2>fin2:
+                    continue # Only take aligned regions
+                for a, amalg in enumerate(amalgamations.copy()):
+                    if i1>=0:
+                        if i2>=0:
+                            if str1[i1] != str2[i2]:
+                                amalgamations.append(amalg + str2[i2]) # 2 options, add branch
+                        amalgamations[a] = amalg + str1[i1]
+                    elif i2>=0:
+                        amalgamations[a] = amalg + str2[i2]
+
+            tracker.stop('align_sequences: Construct amalgamations')
+            tracker.start('align_sequences: Merge amalgamations')
+
+            # Choose best set of words
+            amalgamations = [split_keep_newlines(a) for a in amalgamations]
+            prime_amalgamation = [self.choose_best_word_among(*w) for w in zip(*amalgamations)]
+
+            words.extend(prime_amalgamation)
+            words.extend(residue)
+            variants.append(words)
+
+            tracker.stop('align_sequences: Merge amalgamations')
+
+            if len(variants) >= max_alignments:
+                break
+
+        assert all(len(v) == len(variants[0]) for v in variants), "Variants must all have equal word count"
+
+        tracker.start('align_sequences: Merge variants')
+
+        prime_amalgamation = join_with_newlines([self.choose_best_word_among(*w) for w in zip(*variants)])
+
+        tracker.stop('align_sequences: Merge variants')
+
+        return prime_amalgamation
+
+def split_keep_newlines(text: str) -> list[str]:
+    # This regex matches either sequences of non-whitespace except newline OR a newline character
+    pattern = r'[^\s\n]+|\n'
+    return re.findall(pattern, text)
+
+def join_with_newlines(words: list[str]) -> str:
+    if not words:
+        return ''
+
+    result = [words[0]]
+    for prev, curr in zip(words, words[1:]):
+        if prev == '\n' or curr == '\n':
+            # No space around newlines
+            result.append(curr)
+        else:
+            # Add space between words
+            result.append(' ' + curr)
+    return ''.join(result)
+
 def fuzzy_contains(body, target, max_error=1):
     """
     Returns True if str2 is found within str1 allowing up to max_error
@@ -153,7 +265,7 @@ def fuzzy_contains(body, target, max_error=1):
     match = regex.search(pattern, body)
     return match is not None
 
-def word_distance(w1, w2):
+def word_distance(w1:str, w2:str):
     # Normalized Levenshtein distance between two words
     max_len = max(len(w1), len(w2))
     if max_len == 0:
@@ -206,56 +318,3 @@ def align_sequences_nw(words1, words2, gap_penalty=1, max_error=0.1):
         return 0, None
 
     return best_overlap, best_score
-
-def align_sequences(str1, str2, mode='global', match_score=2, mismatch_score=-1, open_gap_score=-.5, extend_gap_score=-.1):
-
-    Merger = OCRMerger()
-
-    Aligner = Align.PairwiseAligner(mode=mode, match_score=match_score, mismatch_score=mismatch_score)
-    Aligner.open_gap_score = open_gap_score
-    Aligner.extend_gap_score = extend_gap_score
-    Aligner.target_end_gap_score = 0.0
-    Aligner.query_end_gap_score = 0.0
-
-    alignments = Aligner.align(str1, str2)
-
-    variants = []
-    for alignment in alignments:
-        indices1, indices2 = alignment.indices
-        blocks1, blocks2 = alignment.aligned
-
-        # Non-overlapping prefix
-        start1 = blocks1[0, 0]
-        words = split_keep_newlines(str1[:start1])
-
-        # Non-overlapping suffix
-        fin2 = blocks2[-1, -1]
-        residue = split_keep_newlines(str2[fin2:])
-
-        # Build set of possible amalgamations
-        amalgamations = [""] # Start with a single branch
-        for i1, i2 in zip(indices1, indices2):
-            if i1<start1 or i2>fin2:
-                continue # Only take aligned regions
-            for a, amalg in enumerate(amalgamations.copy()):
-                if i1>=0:
-                    if i2>=0:
-                        if str1[i1] != str2[i2]:
-                            amalgamations.append(amalg + str2[i2]) # 2 options, add branch
-                    amalgamations[a] = amalg + str1[i1]
-                elif i2>=0:
-                    amalgamations[a] = amalg + str2[i2]
-
-        # Choose best set of words
-        amalgamations = [split_keep_newlines(a) for a in amalgamations]
-        prime_amalgamation = [Merger.choose_best_word_among(*set(w)) for w in zip(*amalgamations)]
-
-        words.extend(prime_amalgamation)
-        words.extend(residue)
-        variants.append(words)
-
-    assert all(len(v) == len(variants[0]) for v in variants), "Variants must all be same length"
-
-    prime_amalgamation = join_with_newlines([Merger.choose_best_word_among(*set(w)) for w in zip(*variants)])
-
-    return prime_amalgamation
