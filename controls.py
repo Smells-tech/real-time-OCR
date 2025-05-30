@@ -11,6 +11,8 @@ import pyautogui
 import win32api
 import win32con
 
+datafolder = './data/'
+
 def mouseto(x, y, sleep=.05):
     # Move cursor to (x, y)
     win32api.SetCursorPos((x, y))
@@ -89,11 +91,11 @@ def close():
 
 def save_txt(text, filename):
     """Save the text to a .txt file"""
-    with open(f"{filename}.txt", 'w', encoding='utf-8') as f:
+    with open(f"{datafolder}{filename}.txt", 'w', encoding='utf-8') as f:
         f.write(text)
 
 def load_txt(filename):
     """Load text from a .txt file"""
-    with open(f"{filename}.txt", 'r', encoding='utf-8') as f:
+    with open(f"{datafolder}{filename}.txt", 'r', encoding='utf-8') as f:
         text = f.read()
     return text

@@ -12,10 +12,15 @@ class timetrack():
         self.starts[prop] = self.timer()
 
     def stop(self, prop):
+        # Check if `start` has been called
+        if prop not in self.starts:
+            raise RuntimeError(f"`stop('{prop}')` called before `start('{prop}')`")
+        
         stop = self.timer()
         if prop not in self.times:
             self.times[prop] = [ stop - self.starts[prop] ]
-        self.times[prop].append( stop - self.starts[prop])
+        else:
+            self.times[prop].append( stop - self.starts[prop])
 
     def boxplot(self, show=True):
         labels = list(self.times.keys())

@@ -11,7 +11,7 @@ import random
 import pytesseract
 # local
 from error_correction import *
-from lib import *
+from controls import *
 from timer import tracker
 
 Merger = OCRMerger()
@@ -89,57 +89,6 @@ def sequential(args):
     # Close off
     close()
 
-def grablast(args):
-    """
-    Take a screenshot of the final page,
-    extract all text and store for use in asserting final state
-    """
-    if args.verbose:
-        print('Scrolling down to extract final text')
-
-    x, y, width, height = args.screen_rect
-    xs, ys = random.randint(x, width), random.randint(y, height)
-
-    # PageDown
-    if args.nohomekey:
-        for _ in range(50):
-            scroll(xs, ys, dwData=int(-2**30))
-            time.sleep(.05*random.random())
-    else:
-        mouseclick(xs, ys)
-        press_end_key()
-
-    time.sleep(1+random.random())
-
-    # Grab screen
-    image = screengrab(args.screen_rect)
-
-    # Extract text
-    text = pytesseract.image_to_string(image)
-
-    # Strip whitespace
-    text = text.strip()
-
-    # Correct words in text
-    text = Merger.correction(text)
-
-    if args.verbose:
-        print(f'Extracted final text:\n{text}\n')
-        print('Scrolling up', end="\n\n")
-
-    # PageUp
-    if args.nohomekey:
-        for _ in range(50):
-            scroll(xs, ys, dwData=int(2**30))
-            time.sleep(.05+random.random())
-    else:
-        mouseclick(xs, ys)
-        press_home_key()
-
-    time.sleep(1+random.random())
-
-    return text
-
 def main():
     """
     Do some rudimentary command line argument handling
@@ -170,28 +119,12 @@ def main():
         type=str
         )
 
-    # Use Home & End keys
-    parser.add_argument(
-        "--nohomekey",
-        help="Use this flag if the home and end keys do not work in your document; they are used to reach the bodem and top of the document.",
-        action='store_true'
-        )
-
     # Scroll distance
     notchpixels=45
     parser.add_argument(
         "--notchpixels",
         help=f"Amount of pixels that correspond to a single 'click' of the scrollwheel. Default = {notchpixels}",
         default=notchpixels,
-        type=float
-        )
-
-    # Error allowance
-    max_error=.1
-    parser.add_argument(
-        "--max_error",
-        help=f"Errors allowed for matching text as a fraction of smallest text length, default is {max_error}",
-        default=max_error,
         type=float
         )
 
@@ -202,15 +135,6 @@ def main():
         help=f"The 'window' for aligning new sequences to the currect store, as a fraction of the new sequence length, default is {window}",
         default=window,
         type=float
-        )
-
-    # Final line of text
-    final_text=False
-    parser.add_argument(
-        "--final_text",
-        help=f"The last line you're expecting to read. Script will finish when a match is found. Default is {final_text}: script starts by extracting final text",
-        type=str,
-        default=final_text
         )
 
     # Bounding box
@@ -243,9 +167,6 @@ def main():
         print(f"Starting in {i} seconds...", flush=True, end="\r")
         time.sleep(1)
     print()
-
-    if not args.final_text:
-        args.final_text = grablast(args)
 
     sequential(args)
 

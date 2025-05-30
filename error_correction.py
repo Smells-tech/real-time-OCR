@@ -4,7 +4,7 @@ from spellchecker import SpellChecker
 import Levenshtein
 from Bio import Align
 
-from lib import *
+from controls import *
 from timer import tracker
 
 DEFAULT_CORRECTIONS = {
